@@ -39,7 +39,10 @@ const Index = () => {
     localStorage.removeItem(DRAWN_NUMBERS_KEY);
   };
   return <div className="min-h-screen p-4" style={{
-    background: "linear-gradient(135deg, #091933, #6738FF)"
+    backgroundImage: `url(${import.meta.env.BASE_URL}junina.png)`,
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat"
   }}>
       <div className="container mx-auto max-w-7xl">
         <div className="text-center mb-8">
