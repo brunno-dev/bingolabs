@@ -39,7 +39,7 @@ const Index = () => {
     localStorage.removeItem(DRAWN_NUMBERS_KEY);
   };
   return <div className="min-h-screen p-4" style={{
-    backgroundImage: "url('/junina.png')",
+    backgroundImage: `url(${import.meta.env.BASE_URL}junina.png)`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat"
@@ -47,9 +47,9 @@ const Index = () => {
       <div className="container mx-auto max-w-7xl">
         <div className="text-center mb-8">
           <h1 className="text-6xl font-bold text-white mb-4 animate-fade-in drop-shadow-2xl flex items-center justify-center gap-4" style={{textShadow: "2px 2px 4px rgba(0,0,0,0.8)"}}>
-            <img src="/lovable-uploads/a1e796c4-758a-4d86-84ca-7485bc4cd096.png" alt="$$ DE MILHÕES" className="w-16 h-16 object-contain" />
+            <img src={`${import.meta.env.BASE_URL}lovable-uploads/a1e796c4-758a-4d86-84ca-7485bc4cd096.png`} alt="$$ DE MILHÕES" className="w-16 h-16 object-contain" />
             BingoLabs
-            <img src="/lovable-uploads/a1e796c4-758a-4d86-84ca-7485bc4cd096.png" alt="$$ DE MILHÕES" className="w-16 h-16 object-contain" />
+            <img src={`${import.meta.env.BASE_URL}lovable-uploads/a1e796c4-758a-4d86-84ca-7485bc4cd096.png`} alt="$$ DE MILHÕES" className="w-16 h-16 object-contain" />
           </h1>
           
         </div>

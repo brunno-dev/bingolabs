@@ -6,8 +6,8 @@ import { Play, RotateCcw, X } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 // Definindo caminhos para arquivos de áudio
-const rodandoSound = "/sound/rodando.MP3";
-const okSound = "/sound/ok.MP3";
+const rodandoSound = `${import.meta.env.BASE_URL}sound/rodando.MP3`;
+const okSound = `${import.meta.env.BASE_URL}sound/ok.MP3`;
 
 // Constantes para o globo 3D
 const GLOBE_CENTER_X = 200;
