@@ -48,13 +48,13 @@
         width: 400px;
         height: 400px;
         transform-style: preserve-3d;
-        animation: globeRotate 8s linear infinite;
+        animation: globeRotate 3s linear infinite; /* 8s -> 3s: Rotação normal mais rápida */
         margin: 0 auto;
         perspective: 1200px;
     }
     
     .globe-container.spinning {
-        animation: globeRotateFast 3.2s linear infinite;
+        animation: globeRotateFast 1.2s linear infinite; /* 3.2s -> 1.2s: Rotação durante sorteio muito mais rápida */
     }
     
     .ring {
@@ -108,13 +108,14 @@
     .ring-diag-4 { transform: rotateX(-30deg) rotateZ(-45deg); border-width: 2px; border-color: #666; }
     
     @keyframes globeRotate {
-        0% { transform: rotateZ(0deg); }
-        100% { transform: rotateZ(360deg); }
+        0% { transform: rotateZ(0deg) rotateX(5deg); }
+        100% { transform: rotateZ(360deg) rotateX(5deg); }
     }
     
     @keyframes globeRotateFast {
-        0% { transform: rotateZ(0deg); }
-        100% { transform: rotateZ(360deg); }
+        0% { transform: rotateZ(0deg) rotateY(10deg); }
+        50% { transform: rotateZ(180deg) rotateY(-10deg); }
+        100% { transform: rotateZ(360deg) rotateY(10deg); }
     }
     
     .bingo-ball {

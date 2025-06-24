@@ -1,8 +1,8 @@
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { getRandomNumber } from "@/utils/bingoUtils";
-import { Play, RotateCcw, X } from "lucide-react";
+import { Play, RotateCcw, X, Volume2, Volume1, VolumeX, Plus, Minus } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 // Definindo caminhos para arquivos de áudio
@@ -23,7 +23,10 @@ interface BingoWheelProps {
 
 // Interface para representar as bolinhas no globo
 interface BingoBall {
+  id: number;
   number: number;
+  letter: string;
+  color: string;
   x: number;
   y: number;
   z: number;
@@ -37,6 +40,9 @@ interface BingoBall {
   verticalSpeed: number;
 }
 
+// Chave para armazenar configuração de volume no localStorage
+const VOLUME_KEY = "bingoVolumeLevel";
+
 const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: BingoWheelProps) => {
   const [currentNumber, setCurrentNumber] = useState<number | null>(null);
   const [showExplosion, setShowExplosion] = useState(false);
@@ -44,6 +50,22 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
   const [drawnBall, setDrawnBall] = useState<number | null>(null);
   const [fallingBall, setFallingBall] = useState(false);
   const [showBigBall, setShowBigBall] = useState(false);
+  const [showVolumeControls, setShowVolumeControls] = useState(false);
+  
+  // Estado para o controle de volume (inicia com 0.5 ou valor salvo)
+  const [volume, setVolume] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const savedVolume = localStorage.getItem(VOLUME_KEY);
+      if (savedVolume) {
+        try {
+          return parseFloat(savedVolume);
+        } catch (e) {
+          console.error("Erro ao carregar volume do localStorage:", e);
+        }
+      }
+    }
+    return 0.5; // Volume padrão (metade)
+  });
   
   // Refs para os elementos de áudio
   const spinningAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -55,24 +77,201 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
   // Estado para as bolinhas do globo
   const [balls, setBalls] = useState<BingoBall[]>([]);
   
-  // Inicializa os elementos de áudio e as bolinhas ao montar o componente
-  useEffect(() => {
-    // Inicializa áudio
-    spinningAudioRef.current = new Audio(rodandoSound);
-    resultAudioRef.current = new Audio(okSound);
+  // Referência para controlar o contador de frames
+  const frameCountRef = useRef<number>(0);
+  
+  // Referência para os dados das bolinhas em movimento (evita re-renders)  
+  const ballsDataRef = useRef<BingoBall[]>([]);
+  
+  // Constantes de física para animação das bolinhas - balanceadas para evitar agrupamento
+  const GRAVITY = 0.25; // Valor intermediário para evitar movimentação excessiva em um eixo
+  const FRICTION = 0.97; // Fricção para desacelerar gradualmente
+  const BOUNCE = 0.75;  // Elasticidade balanceada
+  
+  // Função para animar as bolinhas dentro do globo - Otimizada
+  const animateBalls = useCallback(() => {
+    if (!ballsDataRef.current.length) return;
     
-    // Configura o áudio da roleta para repetir enquanto estiver girando
-    if (spinningAudioRef.current) {
-      spinningAudioRef.current.loop = true;
+    // Atualiza a posição das bolinhas sem acionar re-renders desnecessários
+    // Usando o índice para resolver o problema de colisão entre bolinhas
+    const updatedBalls = ballsDataRef.current.map((ball, i) => {
+      // Criamos uma cópia para manter a imutabilidade durante o cálculo
+      const newBall = { ...ball };
+      
+      // Movimento orbital independente (com multiplicador de velocidade)
+      newBall.orbitalAngle += newBall.orbitalSpeed * speedMultiplier;
+      newBall.verticalOscillation += newBall.verticalSpeed * speedMultiplier;
+      
+      // Calcular posição orbital
+      const orbitalX = GLOBE_CENTER_X + Math.cos(newBall.orbitalAngle) * newBall.orbitalRadius;
+      const orbitalZ = Math.sin(newBall.orbitalAngle) * newBall.orbitalRadius;
+      const orbitalY = GLOBE_CENTER_Y + Math.sin(newBall.verticalOscillation) * 80;
+      
+      // Aplicar física também (com multiplicador)
+      newBall.vy += GRAVITY * speedMultiplier;
+      
+      // Misturar movimento orbital com física
+      // Balanceamento entre movimento orbital e físico para evitar agrupamento
+      const physicsWeight = 0.6; // Quanto menor, mais o movimento orbital domina
+      const orbitalWeight = 1.0 - physicsWeight;
+      
+      newBall.x = (orbitalX * orbitalWeight) + (newBall.vx * 7 * speedMultiplier * physicsWeight);
+      newBall.y = (orbitalY * orbitalWeight) + (newBall.vy * 7 * speedMultiplier * physicsWeight);
+      newBall.z = (orbitalZ * orbitalWeight) + (newBall.vz * 7 * speedMultiplier * physicsWeight);
+      
+      // Aplicar fricção
+      newBall.vx *= FRICTION;
+      newBall.vy *= FRICTION;
+      newBall.vz *= FRICTION;
+      
+      // Detectar colisões entre bolinhas - usando distância ao quadrado para otimização
+      // Só verifica colisões com bolinhas de índice maior para evitar cálculos duplicados
+      for (let j = i + 1; j < ballsDataRef.current.length; j++) {
+        const otherBall = ballsDataRef.current[j];
+        const dx = newBall.x - otherBall.x;
+        const dy = newBall.y - otherBall.y;
+        const dz = newBall.z - otherBall.z;
+        const distanceSquared = dx * dx + dy * dy + dz * dz;
+        const minDistance = 38; // Diâmetro aumentado para mais espaço entre bolinhas
+        const minDistanceSquared = minDistance * minDistance;
+        
+        if (distanceSquared < minDistanceSquared) {
+          // Adicionar um pequeno fator aleatório para evitar que as bolinhas se agrupem em linha
+          const randomFactor = 0.1;
+          newBall.vx += (Math.random() - 0.5) * randomFactor;
+          newBall.vy += (Math.random() - 0.5) * randomFactor;
+          newBall.vz += (Math.random() - 0.5) * randomFactor;
+          
+          // Calcular normal da superfície - usando distância pré-calculada
+          const distanceFromCenter = Math.sqrt(distanceSquared) || 0.001; // Evitar divisão por zero
+          const normalX = dx / distanceFromCenter;
+          const normalY = dy / distanceFromCenter;
+          const normalZ = dz / distanceFromCenter;
+          
+          // Reposicionar na superfície
+          const adjustment = (minDistance - distanceFromCenter) / 2; // Dividir o ajuste entre as duas bolinhas
+          newBall.x += normalX * adjustment;
+          newBall.y += normalY * adjustment;
+          newBall.z += normalZ * adjustment;
+          
+          // Reflexão da velocidade
+          const dotProduct = newBall.vx * normalX + newBall.vy * normalY + newBall.vz * normalZ;
+          newBall.vx -= 2 * dotProduct * normalX * BOUNCE;
+          newBall.vy -= 2 * dotProduct * normalY * BOUNCE;
+          newBall.vz -= 2 * dotProduct * normalZ * BOUNCE;
+        }
+      }
+      
+      // Verificar colisão com esfera - otimizado com cálculo de distância ao quadrado
+      const dx = newBall.x - GLOBE_CENTER_X;
+      const dy = newBall.y - GLOBE_CENTER_Y;
+      const dz = newBall.z;
+      const distanceSquared = dx*dx + dy*dy + dz*dz;
+      const radiusWithBallAdjustment = SPHERE_RADIUS - 18; // 18 é o raio da bolinha
+      
+      if (distanceSquared > radiusWithBallAdjustment * radiusWithBallAdjustment) {
+        // Calcular normal da superfície - usando distância pré-calculada
+        const distanceFromCenter = Math.sqrt(distanceSquared);
+        const normalX = dx / distanceFromCenter;
+        const normalY = dy / distanceFromCenter;
+        const normalZ = dz / distanceFromCenter;
+        
+        // Reposicionar na superfície
+        const newDistance = radiusWithBallAdjustment;
+        newBall.x = GLOBE_CENTER_X + normalX * newDistance;
+        newBall.y = GLOBE_CENTER_Y + normalY * newDistance;
+        newBall.z = normalZ * newDistance;
+        
+        // Reflexão da velocidade
+        const dotProduct = newBall.vx * normalX + newBall.vy * normalY + newBall.vz * normalZ;
+        newBall.vx -= 2 * dotProduct * normalX * BOUNCE;
+        newBall.vy -= 2 * dotProduct * normalY * BOUNCE;
+        newBall.vz -= 2 * dotProduct * normalZ * BOUNCE;
+        
+        // Mudar direção orbital ao bater na parede
+        newBall.orbitalSpeed *= -0.8;
+      }
+      
+      return newBall;
+    });
+    
+    // Atualiza a referência com os novos dados
+    ballsDataRef.current = updatedBalls;
+    
+    // Atualiza o estado apenas uma vez a cada 3 frames (reduz re-renders)
+    frameCountRef.current = (frameCountRef.current || 0) + 1;
+    
+    if (frameCountRef.current % 3 === 0) {
+      setBalls([...updatedBalls]);
     }
+  }, [speedMultiplier]);
+  
+  // Iniciar loop de animação com requestAnimationFrame para melhor performance
+  const startAnimation = useCallback(() => {
+    let lastTime = 0;
+    const targetFPS = 60;
+    const frameDelay = 1000 / targetFPS;
     
-    // Inicializa bolinhas
-    initBalls();
+    const animate = (timestamp: number) => {
+      const deltaTime = timestamp - lastTime;
+      
+      if (deltaTime >= frameDelay) {
+        animateBalls();
+        lastTime = timestamp;
+      }
+      
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
     
-    // Inicia loop de animação
-    startAnimation();
+    animationFrameRef.current = requestAnimationFrame(animate);
+  }, [animateBalls]);
+  
+  // Salvar volume no localStorage quando mudar
+  useEffect(() => {
+    localStorage.setItem(VOLUME_KEY, volume.toString());
     
-    // Limpeza ao desmontar o componente
+    // Atualizar volume dos áudios existentes
+    if (spinningAudioRef.current) {
+      spinningAudioRef.current.volume = volume;
+    }
+    if (resultAudioRef.current) {
+      resultAudioRef.current.volume = volume;
+    }
+  }, [volume]);
+  
+  // Função para ajustar o volume
+  const adjustVolume = (adjustment: number) => {
+    setVolume(prevVolume => {
+      // Limitar entre 0 e 1
+      const newVolume = Math.max(0, Math.min(1, prevVolume + adjustment));
+      return Number(newVolume.toFixed(1)); // Arredondar para 1 casa decimal
+    });
+  };
+  
+  // Pré-carrega os áudios assim que possível para evitar latência
+  useEffect(() => {
+    // Inicializa áudio com preload
+    const preloadAudio = () => {
+      spinningAudioRef.current = new Audio(rodandoSound);
+      resultAudioRef.current = new Audio(okSound);
+      
+      // Prefetch dos áudios para prevenir delay na primeira execução
+      spinningAudioRef.current.preload = 'auto';
+      resultAudioRef.current.preload = 'auto';
+      
+      // Configura o áudio da roleta para repetir enquanto estiver girando
+      if (spinningAudioRef.current) {
+        spinningAudioRef.current.loop = true;
+        spinningAudioRef.current.volume = volume;
+      }
+      
+      if (resultAudioRef.current) {
+        resultAudioRef.current.volume = volume;
+      }
+    };
+    
+    preloadAudio();
+    
     return () => {
       if (spinningAudioRef.current) {
         spinningAudioRef.current.pause();
@@ -82,13 +281,25 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
         resultAudioRef.current.pause();
         resultAudioRef.current = null;
       }
-      
-      // Cancelar loop de animação
+    };
+  }, []);
+  
+  // Inicializa as bolinhas e começa a animação em um efeito separado
+  useEffect(() => {
+    // Inicializa bolinhas de forma otimizada
+    initBalls();
+    
+    // Inicia loop de animação
+    startAnimation();
+    
+    // Limpeza do loop de animação
+    return () => {
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, []);
+  }, [startAnimation]);
+
 
   // Cores da paleta SEM VERDE
   const paletteColors = [
@@ -105,123 +316,53 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
     return paletteColors[number % paletteColors.length];
   };
   
-  // Inicializa as bolinhas do globo 3D
+  // Inicializa o globo com bolinhas coloridas
   const initBalls = () => {
     const newBalls: BingoBall[] = [];
     
-    // Criar 75 bolinhas numeradas de 1 a 75
+    // Criar todas as bolinhas com números de 1 a 75
     for (let i = 1; i <= 75; i++) {
-      // Posição inicial aleatória com distribuição esférica
-      const orbitalAngle = Math.random() * Math.PI * 2;
-      const orbitalRadius = Math.random() * 120 + 60;
+      // Pegar letra (B, I, N, G, O) baseada no número
+      let letterIndex = 0;
+      if (i <= 15) letterIndex = 0; // B: 1-15
+      else if (i <= 30) letterIndex = 1; // I: 16-30
+      else if (i <= 45) letterIndex = 2; // N: 31-45
+      else if (i <= 60) letterIndex = 3; // G: 46-60
+      else letterIndex = 4; // O: 61-75
       
-      // Velocidade inicial
-      const vx = (Math.random() - 0.5) * 4;
-      const vy = (Math.random() - 0.5) * 4;
-      const vz = (Math.random() - 0.5) * 4;
-      
-      // Movimento orbital independente
-      const verticalOscillation = Math.random() * Math.PI * 2;
-      const verticalSpeed = (Math.random() + 0.5) * 0.03;
-      const orbitalSpeed = (Math.random() + 0.5) * 0.02;
-      
-      // Calcular posição orbital inicial
-      const x = GLOBE_CENTER_X + Math.cos(orbitalAngle) * orbitalRadius;
-      const z = Math.sin(orbitalAngle) * orbitalRadius;
-      const y = GLOBE_CENTER_Y + Math.sin(verticalOscillation) * 80;
+      const letter = "BINGO"[letterIndex];
+      const color = paletteColors[letterIndex];
       
       newBalls.push({
+        id: i,
         number: i,
-        x, y, z,
-        vx, vy, vz,
-        orbitalAngle,
-        orbitalSpeed,
-        orbitalRadius,
-        verticalOscillation,
-        verticalSpeed
+        letter,
+        color,
+        x: GLOBE_CENTER_X + Math.random() * 100 - 50,
+        y: GLOBE_CENTER_Y + Math.random() * 100 - 50,
+        z: Math.random() * 100 - 50,
+        vx: (Math.random() - 0.5) * 10, // Velocidade inicial muito maior
+        vy: (Math.random() - 0.5) * 10, // Velocidade inicial muito maior
+        vz: (Math.random() - 0.5) * 10, // Velocidade inicial muito maior
+        orbitalAngle: Math.random() * Math.PI * 2,
+        orbitalRadius: 150 + Math.random() * 50,
+        // Velocidades orbitais variadas para evitar agrupamento
+        orbitalSpeed: (Math.random() * 0.04 + 0.02) * (Math.random() > 0.5 ? 1 : -1), // Menos extremo
+        verticalOscillation: Math.random() * Math.PI * 2,
+        verticalSpeed: Math.random() * 0.03 + 0.01, // Menos extremo
       });
     }
     
+    // Salvar tanto no estado como na referência para evitar re-renders
     setBalls(newBalls);
+    ballsDataRef.current = [...newBalls];
   };
   
-  // Constantes de física para animação das bolinhas
-  const GRAVITY = 0.2;
-  const FRICTION = 0.98;
-  const BOUNCE = 0.7;
+  // A função animateBalls foi movida para o início do componente
   
-  // Função para animar as bolinhas dentro do globo
-  const animateBalls = () => {
-    setBalls(prevBalls => {
-      return prevBalls.map(ball => {
-        // Copia para não mutar o objeto original
-        const newBall = {...ball};
-        
-        // Movimento orbital independente (com multiplicador de velocidade)
-        newBall.orbitalAngle += newBall.orbitalSpeed * speedMultiplier;
-        newBall.verticalOscillation += newBall.verticalSpeed * speedMultiplier;
-        
-        // Calcular posição orbital
-        const orbitalX = GLOBE_CENTER_X + Math.cos(newBall.orbitalAngle) * newBall.orbitalRadius;
-        const orbitalZ = Math.sin(newBall.orbitalAngle) * newBall.orbitalRadius;
-        const orbitalY = GLOBE_CENTER_Y + Math.sin(newBall.verticalOscillation) * 80;
-        
-        // Aplicar física também (com multiplicador)
-        newBall.vy += GRAVITY * speedMultiplier;
-        
-        // Misturar movimento orbital com física
-        newBall.x = orbitalX + newBall.vx * 5 * speedMultiplier;
-        newBall.y = orbitalY + newBall.vy * 5 * speedMultiplier;
-        newBall.z = orbitalZ + newBall.vz * 5 * speedMultiplier;
-        
-        // Aplicar fricção
-        newBall.vx *= FRICTION;
-        newBall.vy *= FRICTION;
-        newBall.vz *= FRICTION;
-        
-        // Verificar colisão com esfera (paredes do globo)
-        const distanceFromCenter = Math.sqrt(
-          Math.pow(newBall.x - GLOBE_CENTER_X, 2) + 
-          Math.pow(newBall.y - GLOBE_CENTER_Y, 2) + 
-          Math.pow(newBall.z, 2)
-        );
-        
-        if (distanceFromCenter > SPHERE_RADIUS - 18) { // 18 é o raio da bolinha
-          // Calcular normal da superfície
-          const normalX = (newBall.x - GLOBE_CENTER_X) / distanceFromCenter;
-          const normalY = (newBall.y - GLOBE_CENTER_Y) / distanceFromCenter;
-          const normalZ = newBall.z / distanceFromCenter;
-          
-          // Reposicionar na superfície
-          const newDistance = SPHERE_RADIUS - 18;
-          newBall.x = GLOBE_CENTER_X + normalX * newDistance;
-          newBall.y = GLOBE_CENTER_Y + normalY * newDistance;
-          newBall.z = normalZ * newDistance;
-          
-          // Reflexão da velocidade
-          const dotProduct = newBall.vx * normalX + newBall.vy * normalY + newBall.vz * normalZ;
-          newBall.vx -= 2 * dotProduct * normalX * BOUNCE;
-          newBall.vy -= 2 * dotProduct * normalY * BOUNCE;
-          newBall.vz -= 2 * dotProduct * normalZ * BOUNCE;
-          
-          // Mudar direção orbital ao bater na parede
-          newBall.orbitalSpeed *= -0.8;
-        }
-        
-        return newBall;
-      });
-    });
-  };
+
   
-  // Iniciar loop de animação
-  const startAnimation = () => {
-    const animate = () => {
-      animateBalls();
-      animationFrameRef.current = requestAnimationFrame(animate);
-    };
-    
-    animate();
-  };
+
 
   const spinWheel = () => {
     if (isSpinning) return;
@@ -229,21 +370,13 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
     const availableNumbers = Array.from({length: 75}, (_, i) => i + 1)
       .filter(num => !drawnNumbers.includes(num));
     
-    if (availableNumbers.length === 0) {
-      toast({
-        title: "Jogo Finalizado!",
-        description: "Todos os números já foram sorteados!",
-        variant: "default",
-      });
-      return;
-    }
-
-    setIsSpinning(true);
-    setCurrentNumber(null);
-    setFallingBall(false);
     setShowExplosion(false);
+    setDrawnBall(null);
+    setFallingBall(false);
     setShowBigBall(false);
-    setSpeedMultiplier(2.5); // Aumenta a velocidade de rotação do globo
+    
+    // Inicializar com velocidade extremamente alta para garantir efeito visível
+    setSpeedMultiplier(8.0);
     
     // Inicia o som da roleta girando
     if (spinningAudioRef.current) {
@@ -251,7 +384,7 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
       spinningAudioRef.current.play().catch(error => console.error('Erro ao reproduzir áudio:', error));
     }
     
-    // Sorteia um número das bolinhas disponíveis
+    // Sorteia um número das bolinhas disponíveis - com timeout significativamente reduzido
     setTimeout(() => {
       const drawnNumber = getRandomNumber(availableNumbers);
       setDrawnBall(drawnNumber);
@@ -259,13 +392,14 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
       // Animação de bolinha caindo
       setFallingBall(true);
       
+      // Timeout reduzido para animação mais rápida
       setTimeout(() => {
         setFallingBall(false);
         setCurrentNumber(drawnNumber);
         setShowExplosion(true);
         onNumberDrawn(drawnNumber);
         setIsSpinning(false);
-        setSpeedMultiplier(1); // Retorna à velocidade normal
+        setSpeedMultiplier(3.0); // Mantém uma velocidade muito mais rápida que o normal
         
         // Para o som da roleta girando
         if (spinningAudioRef.current) {
@@ -284,9 +418,9 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
           setShowBigBall(true);
         }, 500);
         
-        setTimeout(() => setShowExplosion(false), 1500);
-      }, 1000);
-    }, 3000);
+        setTimeout(() => setShowExplosion(false), 800);
+      }, 800);
+    }, 1500);
   };
 
   // Função para fechar o modal da bola grande
@@ -384,20 +518,54 @@ const BingoWheel = ({ onNumberDrawn, drawnNumbers, isSpinning, setIsSpinning }: 
       )}
       
       {/* Controles - Movido para cima */}
-      <div className="flex gap-4 -mt-6">
-        <Button
-          onClick={spinWheel}
-          disabled={isSpinning}
-          size="lg"
-          className={`text-white px-8 py-4 text-xl font-bold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-105 ${!isSpinning ? 'animate-pulse-slow' : ''}`}
-          style={{
-            background: 'linear-gradient(135deg, #F28526, #D7294E)',
-            border: 'none'
-          }}
-        >
-          <Play className="w-6 h-6 mr-2" />
-          {isSpinning ? 'GIRANDO...' : 'GIRAR ROLETA'}
-        </Button>
+      <div className="flex flex-col items-center gap-4 -mt-6">
+        <div className="flex items-center gap-4">
+          <Button
+            onClick={spinWheel}
+            disabled={isSpinning}
+            size="lg"
+            className={`text-white px-8 py-4 text-xl font-bold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-105 ${!isSpinning ? 'animate-pulse-slow' : ''}`}
+            style={{
+              background: 'linear-gradient(135deg, #F28526, #D7294E)',
+              border: 'none'
+            }}
+          >
+            <Play className="w-6 h-6 mr-2" />
+            {isSpinning ? 'GIRANDO...' : 'GIRAR ROLETA'}
+          </Button>
+          
+          {/* Botões de controle de volume */}
+          <div className="flex items-center gap-1 bg-white rounded-xl overflow-hidden border">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => adjustVolume(-0.1)}
+              disabled={volume <= 0}
+              className="h-10 px-2 rounded-none border-r hover:bg-gray-100"
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+            
+            <div className="flex items-center px-2">
+              {volume === 0 ? <VolumeX className="w-5 h-5" /> : 
+               volume < 0.5 ? <Volume1 className="w-5 h-5" /> : 
+               <Volume2 className="w-5 h-5" />}
+              <span className="text-sm font-medium ml-1 w-8">
+                {Math.round(volume * 100)}%
+              </span>
+            </div>
+            
+            <Button 
+              variant="ghost" 
+              size="sm"
+              onClick={() => adjustVolume(0.1)}
+              disabled={volume >= 1}
+              className="h-10 px-2 rounded-none border-l hover:bg-gray-100"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* Número atual sorteado com efeito de explosão */}
